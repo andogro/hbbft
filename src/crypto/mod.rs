@@ -1,4 +1,4 @@
-mod error;
+pub mod error;
 
 use byteorder::{BigEndian, ByteOrder};
 use init_with::InitWith;
@@ -53,6 +53,18 @@ impl<E: Engine> PublicKey<E> {
         Ciphertext(u, v, w)
     }
 }
+
+#[derive(Debug)]
+pub struct Commitment<E: Engine>(E::Fq);
+
+impl<E: Engine> PartialEq for Commitment<E> {
+    fn eq(&self, other: &Commitment<E>) -> bool {
+        self.0 == other.0
+    }
+}
+
+// TODO
+impl<E: Engine> Commitment<E> {}
 
 /// A signature, or a signature share.
 #[derive(Debug)]
@@ -201,6 +213,29 @@ impl<E: Engine> PublicKeySet<E> {
     }
 }
 
+/// A set of polynomial commitments corresponding to a shared secret in Common Coin.
+#[cfg_attr(feature = "serialization-serde", derive(Serialize, Deserialize))]
+#[derive(Debug)]
+pub struct CommitmentSet<E: Engine> {
+    commitments: Vec<Commitment<E>>,
+}
+
+impl<E: Engine> CommitmentSet<E> {
+    /// Verifies a secret share of a node with a 0-based index `i` against the commitments received
+    /// from another node that sent the secret share.
+    pub fn verify(&self, share: &SecretKey<E>, i: usize) -> bool {
+        let i = i + 1;
+        let prod_exp = self.commitments.iter().enumerate().fold(
+            E::Fq::one(),
+            |mut result, (k, a)| {
+                result.mul_assign(&a.0.pow([(i ^ k) as u64]));
+                result
+            },
+        );
+        prod_exp == E::Fq::one().pow(share.0.into_repr())
+    }
+}
+
 /// A secret key and an associated set of secret key shares.
 pub struct SecretKeySet<E: Engine> {
     /// The coefficients of a polynomial whose value at `0` is the "master key", and value at
@@ -242,6 +277,14 @@ impl<E: Engine> SecretKeySet<E> {
         let to_pub = |c: &E::Fr| PublicKey(E::G1Affine::one().mul(*c));
         PublicKeySet {
             coeff: self.coeff.iter().map(to_pub).collect(),
+        }
+    }
+
+    /// Computes the polynomial commitments for Common Coin.
+    pub fn commitments(&self) -> CommitmentSet<E> {
+        let to_commit = |a: &E::Fr| Commitment(E::Fq::one().pow(a.into_repr()));
+        CommitmentSet {
+            commitments: self.coeff.iter().map(to_commit).collect(),
         }
     }
 }
